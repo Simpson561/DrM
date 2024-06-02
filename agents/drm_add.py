@@ -99,17 +99,13 @@ class Critic(nn.Module):
 
         self.Q1 = nn.Sequential(
             nn.Linear(feature_dim + action_shape[0], hidden_dim),
-            nn.Dropout(0.01), nn.LayerNorm(hidden_dim), nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim), nn.Dropout(0.01),
-            nn.LayerNorm(hidden_dim), nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, 1))
+            nn.ReLU(inplace=True), nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True), nn.Linear(hidden_dim, 1))
 
         self.Q2 = nn.Sequential(
             nn.Linear(feature_dim + action_shape[0], hidden_dim),
-            nn.Dropout(0.01), nn.LayerNorm(hidden_dim), nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, hidden_dim), nn.Dropout(0.01),
-            nn.LayerNorm(hidden_dim), nn.ReLU(inplace=True),
-            nn.Linear(hidden_dim, 1))
+            nn.ReLU(inplace=True), nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(inplace=True), nn.Linear(hidden_dim, 1))
 
         self.apply(utils.weight_init)
 
@@ -145,10 +141,10 @@ class VNetwork(nn.Module):
 class DrMAgent:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, dormant_threshold,
-                 target_dormant_ratio, dormant_temp,dormant_perturb_interval,
-                 min_perturb_factor, max_perturb_factor, perturb_rate, target_lambda,
-                 num_expl_steps, stddev_type, stddev_schedule, stddev_clip,
-                 expectile, use_tb):
+                 target_dormant_ratio, dormant_temp, target_lambda,
+                 lambda_temp, dormant_perturb_interval, min_perturb_factor,
+                 max_perturb_factor, perturb_rate, num_expl_steps, stddev_type,
+                 stddev_schedule, stddev_clip, expectile, use_tb):
         self.device = device
         self.critic_target_tau = critic_target_tau
         self.use_tb = use_tb
@@ -159,12 +155,13 @@ class DrMAgent:
         self.dormant_threshold = dormant_threshold
         self.target_dormant_ratio = target_dormant_ratio
         self.dormant_temp = dormant_temp
-        self.dormant_perturb_interval=dormant_perturb_interval
+        self.target_lambda = target_lambda
+        self.lambda_temp = lambda_temp
+        self.dormant_ratio = 1
+        self.dormant_perturb_interval = dormant_perturb_interval
         self.min_perturb_factor = min_perturb_factor
         self.max_perturb_factor = max_perturb_factor
         self.perturb_rate = perturb_rate
-        self.dormant_ratio = 1
-        self.target_lambda = target_lambda
         self.expectile = expectile
         self.awaken_step = None
 
@@ -174,7 +171,6 @@ class DrMAgent:
                            hidden_dim).to(device)
         self.value_predictor = VNetwork(self.encoder.repr_dim, feature_dim,
                                         hidden_dim).to(device)
-
         self.critic = Critic(self.encoder.repr_dim, action_shape, feature_dim,
                              hidden_dim).to(device)
         self.critic_target = Critic(self.encoder.repr_dim, action_shape,
@@ -194,33 +190,39 @@ class DrMAgent:
         self.train()
         self.critic_target.train()
 
-    @property
-    def dormant_stddev(self):
+    def tune_target_dormant_ratio(self,step):
+        return self.dormant_ratio
+        #+1e-7*step
+
+    def dormant_stddev(self,step):
         return 1 / (1 +
                     math.exp(-self.dormant_temp *
-                             (self.dormant_ratio - self.target_dormant_ratio)))
-        
-    def stddev(self,step):
+                             (self.dormant_ratio - self.tune_target_dormant_ratio(step))))
+
+    def stddev(self, step):
         if self.stddev_type == "max":
-            return max(utils.schedule(self.stddev_schedule, step),
-                         self.stddev)
+            return max(utils.schedule(self.stddev_schedule, step), self.stddev)
         elif self.stddev_type == "dormant":
-            return  self.dormant_stddev
+            return self.dormant_stddev(step)
         elif self.stddev_type == "awake":
             if self.awaken_step == None:
-                return self.dormant_stddev
+                return self.dormant_stddev(step)
             else:
                 return max(
-                    self.dormant_stddev,
+                    self.dormant_stddev(step),
                     utils.schedule(self.stddev_schedule,
                                    step - self.awaken_step))
         else:
             raise NotImplementedError(self.stddev_type)
 
-    
-    @property
-    def perturb_factor(self):
-        return min(max(self.min_perturb_factor, 1 - self.perturb_rate * self.dormant_ratio), self.max_perturb_factor)
+    def perturb_factor(self, step):
+        return min(self.min_perturb_factor+ self.perturb_rate * step, self.max_perturb_factor)
+
+
+    def lambda_(self,step):
+        return self.target_lambda / (
+            1 + math.exp(self.lambda_temp *
+                         (self.dormant_ratio - self.tune_target_dormant_ratio(step))))
 
     def train(self, training=True):
         self.training = training
@@ -271,9 +273,8 @@ class DrMAgent:
             target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
             target_V_explore = torch.min(target_Q1, target_Q2)
             target_V_exploit = self.value_predictor(next_obs)
-            lambda_ = self.target_lambda
-            target_V = lambda_ * target_V_exploit + (
-                1 - lambda_) * target_V_explore
+            target_V = self.lambda_(step)* target_V_exploit + (
+                1 - self.lambda_(step)) * target_V_explore
             target_Q = reward + (discount * target_V)
 
         Q1, Q2 = self.critic(obs, action)
@@ -313,23 +314,22 @@ class DrMAgent:
             metrics['actor_loss'] = actor_loss.item()
             metrics['actor_logprob'] = log_prob.mean().item()
             metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
-
+        
         return metrics
 
-    def perturb(self):
-        utils.perturb(self.actor, self.actor_opt, self.perturb_factor)
-        utils.perturb(self.critic, self.critic_opt, self.perturb_factor)
-        utils.perturb(self.critic_target, self.critic_opt, self.perturb_factor)
-        utils.perturb(self.encoder, self.encoder_opt, self.perturb_factor)
+    def perturb(self, step):
+        utils.perturb(self.actor, self.actor_opt, self.perturb_factor(step))
+        utils.perturb(self.critic, self.critic_opt, self.perturb_factor(step))
+        utils.perturb(self.critic_target, self.critic_opt,
+                      self.perturb_factor(step))
+        utils.perturb(self.encoder, self.encoder_opt,
+                      self.perturb_factor(step))
         utils.perturb(self.value_predictor, self.predictor_opt,
-                    self.perturb_factor)
-        
+                      self.perturb_factor(step))
+
     def update(self, replay_iter, step):
         metrics = dict()
-
-        if step % self.dormant_perturb_interval == 0:
-            self.perturb()
-            
+      
         batch = next(replay_iter)
         obs, action, reward, discount, next_obs = utils.to_torch(
             batch, self.device)
@@ -344,13 +344,18 @@ class DrMAgent:
 
         # calculate dormant ratio
         self.dormant_ratio = utils.cal_dormant_ratio(
-            self.actor, obs.detach(), 0, percentage=self.dormant_threshold)
-        if self.awaken_step is None and self.dormant_ratio < self.target_dormant_ratio:
+            self.actor, obs.detach(), 0,  percentage=+step*8e-10)
+        
+        #Version 1: percentage=self.dormant_threshold-step*1e-9
+        #Version 2: percentage=self.dormant_threshold+step*8e-10
+        #Version 3: percentage=self.dormant_threshold+abs(1e-9*(step-5e6)-5e-3)
+        
+        if self.awaken_step is None and step > self.num_expl_steps and self.dormant_ratio < self.tune_target_dormant_ratio(step):
             self.awaken_step = step
 
         if self.use_tb:
             metrics['batch_reward'] = reward.mean().item()
-            metrics['actor_dormant_ratio'] = self.dormant_ratio
+        metrics['actor_dormant_ratio'] = self.dormant_ratio
 
         # update predictor
         metrics.update(self.update_predictor(obs.detach(), action))
@@ -365,5 +370,11 @@ class DrMAgent:
         # update critic target
         utils.soft_update_params(self.critic, self.critic_target,
                                  self.critic_target_tau)
-        
+        if step % self.dormant_perturb_interval == 0:
+            self.perturb(step)
+
+
+
         return metrics
+
+#alter target_dormant_ratio: alter all those using target_dormant_ratio

@@ -1,5 +1,5 @@
 agent:
-  _target_: agents.drm_mw.DrMAgent
+  _target_: agents.drm.DrMAgent
   obs_shape: ??? # to be specified later
   action_shape: ??? # to be specified later
   device: ${device}
@@ -7,11 +7,11 @@ agent:
   critic_target_tau: 0.01
   dormant_threshold: 0.025
   target_dormant_ratio: 0.2
-  target_lambda: 0.5
   dormant_temp: 10
+  lambda_temp: 50
   dormant_perturb_interval: 100000
   min_perturb_factor: 0.2
-  max_perturb_factor: 0.95
+  max_perturb_factor: ??? # to be specified later
   perturb_rate: 2
   use_tb: ${use_tb}
   num_expl_steps: 2000
