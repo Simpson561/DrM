@@ -138,7 +138,7 @@ class VNetwork(nn.Module):
         return v
 
 
-class DrMAgent:
+class DrMAgent_hybrid:
     def __init__(self, obs_shape, action_shape, device, lr, feature_dim,
                  hidden_dim, critic_target_tau, dormant_threshold,
                  target_dormant_ratio, dormant_temp, target_lambda,
