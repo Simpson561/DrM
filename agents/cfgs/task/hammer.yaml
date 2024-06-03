@@ -1,6 +1,0 @@
-defaults:
-  - adroit_medium
-  - _self_
-
-domain: adroit
-task_name: hammer
