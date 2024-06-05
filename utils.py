@@ -170,6 +170,21 @@ def cal_dormant_ratio(model, *inputs, percentage=0.025):
     return dormant_neurons / total_neurons
 
 
+def cal_dormant_grad(model, *inputs, percentage=0.025):
+    total_neurons = 0
+    dormant_neurons = 0
+
+    for _, module in model.named_modules():
+        if isinstance(module, nn.Linear):
+            grad_norm = module.weight.grad.abs().mean(1)
+            avg_grad_norm = grad_norm.mean()
+            dormant_indices = (grad_norm < avg_grad_norm * percentage).nonzero(as_tuple=True)[0]
+            total_neurons += module.weight.shape[0]
+            dormant_neurons += len(dormant_indices)
+
+    return dormant_neurons / total_neurons
+
+
 def perturb(net, optimizer, perturb_factor):
     linear_keys = [
         name for name, mod in net.named_modules()

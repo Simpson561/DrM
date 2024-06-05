@@ -343,8 +343,10 @@ class DrMAgent:
             next_obs = self.encoder(next_obs)
 
         # calculate dormant ratio
-        self.dormant_ratio = utils.cal_dormant_ratio(
-            self.actor, obs.detach(), 0, percentage=self.dormant_threshold)
+        self.dormant_ratio = (
+            utils.cal_dormant_grad(self.actor, obs.detach(), 0, percentage=self.dormant_threshold) if step > 5000 else 0
+            # utils.cal_dormant_ratio(self.actor, obs.detach(), 0, percentage=self.dormant_threshold)
+        )
 
         if self.awaken_step is None and step > self.num_expl_steps and self.dormant_ratio < self.target_dormant_ratio:
             self.awaken_step = step
