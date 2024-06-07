@@ -49,6 +49,9 @@ class Encoder(nn.Module):
         assert len(obs_shape) == 3
         self.repr_dim = 32 * 35 * 35
 
+        # print("obs_shape: ", obs_shape)
+        print("difference encoder")
+
         self.convnet = nn.Sequential(nn.Conv2d(obs_shape[0], 32, 3, stride=2),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
                                      nn.ReLU(), nn.Conv2d(32, 32, 3, stride=1),
@@ -58,7 +61,11 @@ class Encoder(nn.Module):
         self.apply(utils.weight_init)
 
     def forward(self, obs):
-        obs = obs / 255.0 - 0.5
+        obs = obs * 1.0
+        obs[..., 1, :, :] -= obs[..., 0, :, :]
+        obs[..., 2, :, :] -= obs[..., 0, :, :]
+        obs[..., 0, :, :] = obs[..., 0, :, :] / 255.0 - 0.5
+        # obs = obs / 255.0 - 0.5
         h = self.convnet(obs)
         h = h.view(h.shape[0], -1)
         return h
